@@ -90,7 +90,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #0a0a0a;
+  background: #000;
   overflow: hidden;
 }
 
@@ -98,16 +98,15 @@ body {
   content: '';
   position: absolute;
   inset: 0;
-  background:
-    radial-gradient(ellipse 60% 50% at 20% 30%, rgba(251,206,181,0.07) 0%, transparent 70%),
-    radial-gradient(ellipse 50% 40% at 80% 70%, rgba(99,102,241,0.06) 0%, transparent 70%);
+  background: url('/auth-bg.png') center/cover no-repeat;
+  opacity: 0.45;
   pointer-events: none;
 }
 
 .auth-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(0,0,0,0.4);
+  background: linear-gradient(160deg, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.5) 50%, rgba(0,0,0,0.75) 100%);
   z-index: 0;
 }
 
@@ -191,7 +190,7 @@ body {
 }
 
 .auth-input:focus {
-  border-color: rgba(251,206,181,0.5);
+  border-color: rgba(34,197,94,0.5);
   background: rgba(255,255,255,0.08);
 }
 
@@ -217,24 +216,26 @@ body {
   height: 50px;
   border: none;
   border-radius: 40px;
-  background: #fbceb5;
-  color: #000;
+  background: #22c55e;
+  color: #fff;
   font-size: 0.9rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   cursor: pointer;
-  transition: background 0.3s, transform 0.15s;
+  transition: background 0.3s, transform 0.15s, box-shadow 0.3s;
   font-family: inherit;
   display: flex;
   align-items: center;
   justify-content: center;
   margin-top: 0.25rem;
+  box-shadow: 0 0 20px rgba(34,197,94,0.2);
 }
 
 .auth-btn:hover {
-  background: #f5b998;
+  background: #16a34a;
   transform: translateY(-1px);
+  box-shadow: 0 0 30px rgba(34,197,94,0.35);
 }
 
 .auth-btn:active {
@@ -258,7 +259,7 @@ body {
 }
 
 .auth-remember input[type="checkbox"] {
-  accent-color: #fbceb5;
+  accent-color: #22c55e;
   width: 15px;
   height: 15px;
   cursor: pointer;
@@ -276,7 +277,7 @@ body {
 .auth-link {
   background: none;
   border: none;
-  color: #fbceb5;
+  color: #4ade80;
   font-size: 0.8rem;
   cursor: pointer;
   padding: 0;
