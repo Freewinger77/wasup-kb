@@ -6,6 +6,7 @@ import {
   OrganizationSwitcher,
   useOrganization,
   useAuth,
+  AuthenticateWithRedirectCallback,
 } from '@clerk/clerk-react';
 import AuthPage from './components/AuthPage';
 import Sidebar, { type View } from './components/Sidebar';
@@ -112,7 +113,21 @@ function MainApp() {
   );
 }
 
+function SSOCallback() {
+  return (
+    <div className="flex h-screen bg-zinc-950 items-center justify-center">
+      <AuthenticateWithRedirectCallback />
+    </div>
+  );
+}
+
 export default function App() {
+  const path = window.location.pathname;
+
+  if (path === '/sso-callback') {
+    return <SSOCallback />;
+  }
+
   return (
     <>
       <SignedOut>
