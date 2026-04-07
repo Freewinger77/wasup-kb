@@ -93,16 +93,34 @@ export default function AuthPage() {
 
   const handleGoogleSSO = useCallback(async () => {
     if (!signInLoaded || !signIn) return;
+    setLoading(true);
+    setError('');
     try {
-      await signIn.authenticateWithRedirect({
+      const result = await signIn.create({
         strategy: 'oauth_google',
-        redirectUrl: '/sso-callback',
-        redirectUrlComplete: '/',
+        redirectUrl: window.location.origin + '/sso-callback',
+        actionCompleteRedirectUrl: '/',
       });
+
+      const url =
+        result.firstFactorVerification?.externalVerificationRedirectURL;
+      if (url) {
+        window.location.href = url.toString();
+        return;
+      }
+
+      if (result.status === 'complete' && setActive) {
+        await setActive({ session: result.createdSessionId });
+      }
     } catch (e: any) {
-      setError('Google sign-in failed');
+      const msg =
+        e?.errors?.[0]?.longMessage ||
+        e?.errors?.[0]?.message ||
+        'Google sign-in failed';
+      setError(msg);
+      setLoading(false);
     }
-  }, [signIn, signInLoaded]);
+  }, [signIn, signInLoaded, setActive]);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
