@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { Building2, ChevronDown, LogOut } from 'lucide-react';
 import {
   SignedIn,
   SignedOut,
-  UserButton,
   OrganizationSwitcher,
   useOrganization,
   useAuth,
+  useUser,
   AuthenticateWithRedirectCallback,
 } from '@clerk/clerk-react';
 import AuthPage from './components/AuthPage';
@@ -32,10 +33,13 @@ function NeedsOrg() {
   return (
     <div className="flex-1 flex items-center justify-center bg-zinc-950">
       <div className="text-center space-y-6 max-w-md px-6">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center mx-auto shadow-lg shadow-green-500/20">
+          <Building2 size={28} className="text-white" />
+        </div>
         <h2 className="text-xl font-semibold text-white">Create or Join an Organization</h2>
         <p className="text-sm text-zinc-400">
-          You need to be part of an organization to use Wasup KB.
           Each organization gets its own shared knowledge base.
+          Create one to get started, or ask your team to invite you.
         </p>
         <div className="flex justify-center">
           <OrganizationSwitcher
@@ -45,12 +49,102 @@ function NeedsOrg() {
             appearance={{
               elements: {
                 rootBox: 'w-full',
-                organizationSwitcherTrigger: 'w-full justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg px-4 py-2.5 text-sm',
+                organizationSwitcherTrigger: 'w-full justify-center bg-green-600 hover:bg-green-500 text-white rounded-full px-4 py-2.5 text-sm font-medium transition-all',
               },
             }}
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+function UserMenu() {
+  const { user } = useUser();
+  const { organization } = useOrganization();
+  const { signOut } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [showOrgSwitcher, setShowOrgSwitcher] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+        setShowOrgSwitcher(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const imgUrl = user?.imageUrl;
+  const displayName = user?.firstName || user?.emailAddresses?.[0]?.emailAddress?.split('@')[0] || 'User';
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => { setOpen(!open); setShowOrgSwitcher(false); }}
+        className="flex items-center gap-2 rounded-full hover:bg-zinc-800/60 transition-colors pl-1 pr-2 py-1"
+      >
+        {imgUrl ? (
+          <img src={imgUrl} alt="" className="w-7 h-7 rounded-full" />
+        ) : (
+          <div className="w-7 h-7 rounded-full bg-green-600 flex items-center justify-center text-white text-xs font-semibold">
+            {displayName[0]?.toUpperCase()}
+          </div>
+        )}
+        <ChevronDown size={14} className="text-zinc-500" />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-10 w-64 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl shadow-black/50 py-1.5 z-50 animate-fade-in">
+          <div className="px-3 py-2 border-b border-zinc-800/60">
+            <p className="text-sm text-white font-medium truncate">{displayName}</p>
+            <p className="text-[11px] text-zinc-500 truncate">{user?.emailAddresses?.[0]?.emailAddress}</p>
+          </div>
+
+          {organization && (
+            <div className="px-3 py-2 border-b border-zinc-800/60">
+              <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-1">Organization</p>
+              <button
+                onClick={() => setShowOrgSwitcher(!showOrgSwitcher)}
+                className="w-full flex items-center gap-2 text-sm text-zinc-300 hover:text-white transition-colors"
+              >
+                <Building2 size={14} className="text-green-500" />
+                <span className="truncate flex-1 text-left">{organization.name}</span>
+                <ChevronDown size={12} className={`text-zinc-600 transition-transform ${showOrgSwitcher ? 'rotate-180' : ''}`} />
+              </button>
+              {showOrgSwitcher && (
+                <div className="mt-2">
+                  <OrganizationSwitcher
+                    hidePersonal
+                    afterCreateOrganizationUrl="/"
+                    afterSelectOrganizationUrl="/"
+                    appearance={{
+                      elements: {
+                        rootBox: 'w-full',
+                        organizationSwitcherTrigger: 'w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg px-3 py-2 text-xs border border-zinc-700/50',
+                        organizationSwitcherPopoverCard: 'bg-zinc-900 border-zinc-800',
+                      },
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="px-1 py-1">
+            <button
+              onClick={() => signOut()}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-zinc-400 hover:text-white hover:bg-zinc-800/60 rounded-lg transition-colors"
+            >
+              <LogOut size={14} />
+              Sign out
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -75,28 +169,13 @@ function MainApp() {
 
       <main className="flex-1 flex flex-col min-w-0">
         <header className="flex items-center justify-between px-6 h-12 bg-zinc-950 border-b border-zinc-800/40">
-          <div className="flex items-center gap-3">
-            <OrganizationSwitcher
-              hidePersonal
-              afterCreateOrganizationUrl="/"
-              afterSelectOrganizationUrl="/"
-              appearance={{
-                elements: {
-                  rootBox: '',
-                  organizationSwitcherTrigger: 'bg-zinc-800/60 hover:bg-zinc-700/60 text-zinc-300 rounded-md px-2.5 py-1 text-xs border border-zinc-700/50',
-                },
-              }}
-            />
+          <div className="flex items-center gap-2">
+            <Building2 size={14} className="text-green-500" />
+            <span className="text-xs font-medium text-zinc-400">{orgName}</span>
           </div>
           <div className="flex items-center gap-3">
             <LanguageSelector language={language} onChange={setLanguage} />
-            <UserButton
-              appearance={{
-                elements: {
-                  avatarBox: 'w-7 h-7',
-                },
-              }}
-            />
+            <UserMenu />
           </div>
         </header>
 
