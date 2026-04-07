@@ -158,7 +158,7 @@ export default function AuthPage() {
           {pendingVerification
             ? 'Verify Email'
             : mode === 'signin'
-              ? 'Have an account?'
+              ? 'Log back into Sales KB'
               : mode === 'signup'
                 ? 'Create Account'
                 : 'Reset Password'}
