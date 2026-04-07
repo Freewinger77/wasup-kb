@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import {
-  SignIn,
   SignedIn,
   SignedOut,
   UserButton,
@@ -8,6 +7,7 @@ import {
   useOrganization,
   useAuth,
 } from '@clerk/clerk-react';
+import AuthPage from './components/AuthPage';
 import Sidebar, { type View } from './components/Sidebar';
 import LanguageSelector from './components/LanguageSelector';
 import ChatPanel from './components/ChatPanel';
@@ -116,23 +116,7 @@ export default function App() {
   return (
     <>
       <SignedOut>
-        <div className="flex h-screen bg-zinc-950 items-center justify-center">
-          <div className="w-full max-w-md">
-            <div className="text-center mb-8">
-              <h1 className="text-2xl font-bold text-white">Wasup KB</h1>
-              <p className="text-sm text-zinc-500 mt-1">AI Knowledge Base</p>
-            </div>
-            <SignIn
-              routing="hash"
-              appearance={{
-                elements: {
-                  rootBox: 'w-full',
-                  card: 'bg-zinc-900 border border-zinc-800 shadow-xl',
-                },
-              }}
-            />
-          </div>
-        </div>
+        <AuthPage />
       </SignedOut>
       <SignedIn>
         <MainApp />
