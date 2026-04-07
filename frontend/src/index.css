@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #09090b;
+  --bg-secondary: #18181b;
+  --bg-card: #1c1c21;
+  --bg-elevated: #27272a;
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --accent: #6366f1;
+  --accent-glow: rgba(99, 102, 241, 0.25);
+  --border: #27272a;
+  --border-subtle: #1f1f23;
+  --success: #22c55e;
+  --destructive: #ef4444;
+  --ring: rgba(99, 102, 241, 0.5);
+}
+
+body {
+  margin: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* { box-sizing: border-box; }
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg-elevated); border-radius: 99px; }
+
+@keyframes orb-idle {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.05); opacity: 0.8; }
+}
+@keyframes orb-listening {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 var(--accent-glow); }
+  50% { transform: scale(1.08); box-shadow: 0 0 60px 20px var(--accent-glow); }
+}
+@keyframes orb-speaking {
+  0% { transform: scale(1); box-shadow: 0 0 30px 5px var(--accent-glow); }
+  25% { transform: scale(1.12); box-shadow: 0 0 80px 25px var(--accent-glow); }
+  50% { transform: scale(1.04); box-shadow: 0 0 40px 10px var(--accent-glow); }
+  75% { transform: scale(1.1); box-shadow: 0 0 70px 20px var(--accent-glow); }
+  100% { transform: scale(1); box-shadow: 0 0 30px 5px var(--accent-glow); }
+}
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.orb-idle { animation: orb-idle 3s ease-in-out infinite; }
+.orb-listening { animation: orb-listening 1.5s ease-in-out infinite; }
+.orb-speaking { animation: orb-speaking 1.2s ease-in-out infinite; }
+
+.shimmer-text {
+  background: linear-gradient(90deg, var(--text-secondary) 25%, var(--text-primary) 50%, var(--text-secondary) 75%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+.fade-in { animation: fade-in 0.3s ease-out forwards; }
+
+@keyframes aura-pulse {
+  0%, 100% { transform: translateX(-50%) scale(1); opacity: 0.3; }
+  50% { transform: translateX(-50%) scale(1.08); opacity: 0.5; }
+}
+@keyframes aura-drift {
+  0% { transform: translateX(-10%) scale(1); }
+  100% { transform: translateX(10%) scale(1.05); }
+}
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out forwards;
+}
