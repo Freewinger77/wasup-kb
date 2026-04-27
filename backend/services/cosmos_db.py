@@ -26,6 +26,7 @@ class CosmosDBService:
         self._test_cases_container = None
         self._test_runs_container = None
         self._deployments_container = None
+        self._knowledge_sources_container = None
 
     async def initialize(self):
         self._db = self._client.get_database_client(settings.COSMOS_DATABASE)
@@ -62,6 +63,10 @@ class CosmosDBService:
         )
         self._deployments_container = await self._db.create_container_if_not_exists(
             id="deployments",
+            partition_key=PartitionKey(path="/org_id"),
+        )
+        self._knowledge_sources_container = await self._db.create_container_if_not_exists(
+            id="knowledge_sources",
             partition_key=PartitionKey(path="/org_id"),
         )
         try:
@@ -381,6 +386,38 @@ class CosmosDBService:
                 [{"name": "@agent_definition_id", "value": agent_definition_id}],
             )
         return await self._query_by_org(self._deployments_container, org_id)
+
+    async def upsert_knowledge_source(self, source: dict) -> dict:
+        doc = self._serialize(source)
+        doc["updated_at"] = datetime.utcnow().isoformat()
+        await self._knowledge_sources_container.upsert_item(doc)
+        return doc
+
+    async def list_knowledge_sources(
+        self,
+        org_id: str,
+        scope: str | None = None,
+        customer_id: str | None = None,
+        agent_definition_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        query = "SELECT * FROM c WHERE c.org_id = @org_id"
+        params = [{"name": "@org_id", "value": org_id}]
+        if scope:
+            query += " AND c.scope = @scope"
+            params.append({"name": "@scope", "value": scope})
+        if customer_id:
+            query += " AND c.customer_id = @customer_id"
+            params.append({"name": "@customer_id", "value": customer_id})
+        if agent_definition_id:
+            query += " AND c.agent_definition_id = @agent_definition_id"
+            params.append({"name": "@agent_definition_id", "value": agent_definition_id})
+        query += " ORDER BY c.created_at DESC OFFSET 0 LIMIT @limit"
+        params.append({"name": "@limit", "value": limit})
+        items = []
+        async for item in self._knowledge_sources_container.query_items(query, parameters=params, partition_key=org_id):
+            items.append(item)
+        return items
 
     # ---- YouTube channel scan jobs (durable progress; survives refresh / restart) ----
 

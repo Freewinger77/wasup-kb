@@ -79,6 +79,19 @@ export interface UploadResult {
 
 export type KnowledgeScope = 'org_wide' | 'customer';
 
+export interface KnowledgeSource {
+  id: string;
+  source_type: string;
+  source_path: string;
+  filename: string;
+  scope: KnowledgeScope;
+  customer_id?: string | null;
+  agent_definition_id?: string | null;
+  status: string;
+  chunks_created: number;
+  created_at?: string;
+}
+
 export interface Customer {
   id: string;
   org_id: string;
@@ -241,6 +254,25 @@ export async function uploadDocuments(
     method: 'POST',
     headers: await authHeadersNoContent(),
     body: formData,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listKnowledgeSources(params: {
+  scope?: KnowledgeScope;
+  customerId?: string;
+  agentDefinitionId?: string;
+  limit?: number;
+} = {}): Promise<KnowledgeSource[]> {
+  const query = new URLSearchParams();
+  if (params.scope) query.set('scope', params.scope);
+  if (params.customerId) query.set('customer_id', params.customerId);
+  if (params.agentDefinitionId) query.set('agent_definition_id', params.agentDefinitionId);
+  if (params.limit) query.set('limit', String(params.limit));
+  const qs = query.toString() ? `?${query.toString()}` : '';
+  const res = await fetch(`${BASE}/documents/sources${qs}`, {
+    headers: await authHeadersNoContent(),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -463,6 +495,16 @@ export async function runTestCases(agentDefinitionId: string, promptVersionId?: 
     method: 'POST',
     headers: await authHeaders(),
     body: JSON.stringify({ agent_definition_id: agentDefinitionId, prompt_version_id: promptVersionId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPromptfooConfig(agentDefinitionId: string, promptVersionId?: string) {
+  const query = new URLSearchParams({ agent_definition_id: agentDefinitionId });
+  if (promptVersionId) query.set('prompt_version_id', promptVersionId);
+  const res = await fetch(`${BASE}/builder/promptfoo?${query.toString()}`, {
+    headers: await authHeadersNoContent(),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

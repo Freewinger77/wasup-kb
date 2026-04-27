@@ -1,5 +1,7 @@
 from datetime import datetime
 from typing import Any
+import json
+import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -31,6 +33,7 @@ from backend.services.builder_prompts import (
 from backend.services.cosmos_db import cosmos_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 async def _agent(org_id: str, agent_definition_id: str) -> dict:
@@ -45,6 +48,19 @@ async def _latest_prompt(org_id: str, agent_definition_id: str, prompt_version_i
         return await cosmos_service.get_prompt_version(prompt_version_id, org_id)
     prompts = await cosmos_service.list_prompt_versions(org_id, agent_definition_id)
     return prompts[0] if prompts else None
+
+
+def _items(payload: Any, key: str) -> list[dict]:
+    if isinstance(payload, list):
+        return [x for x in payload if isinstance(x, dict)]
+    if isinstance(payload, dict):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [x for x in value if isinstance(x, dict)]
+        # Some models return {"0": {...}, "1": {...}} for array-like JSON.
+        if all(str(k).isdigit() for k in payload.keys()):
+            return [v for _, v in sorted(payload.items()) if isinstance(v, dict)]
+    return []
 
 
 @router.get("/work-specs")
@@ -76,9 +92,10 @@ async def generate_work_spec(payload: GenerateSpecRequest, request: Request):
         top=8,
     )
     context_text = "\n\n".join(f"{d['filename']}: {d['content']}" for d in context)
-    spec_json = await complete_json(
-        SPEC_GENERATION_SYSTEM,
-        f"""Discovery transcript or brief:
+    try:
+        spec_json = await complete_json(
+            SPEC_GENERATION_SYSTEM,
+            f"""Discovery transcript or brief:
 {payload.discovery_text}
 
 Supporting knowledge:
@@ -87,7 +104,10 @@ Supporting knowledge:
 Customer metadata:
 customer_name: {payload.customer_name or "unknown"}
 industry_hint: {payload.industry_hint or "unknown"}""",
-    )
+        )
+    except Exception as e:
+        logger.exception("Work spec generation failed")
+        raise HTTPException(status_code=502, detail=f"Work spec generation failed: {type(e).__name__}")
     spec = WorkSpec(
         org_id=org_id,
         agent_definition_id=payload.agent_definition_id,
@@ -128,10 +148,14 @@ async def generate_prompt(payload: GeneratePromptRequest, request: Request):
     spec = await cosmos_service.get_work_spec(payload.work_spec_id, org_id)
     if not spec:
         raise HTTPException(status_code=404, detail="Work spec not found")
-    system_prompt = await complete_text(
-        PROMPT_GENERATION_SYSTEM,
-        f"Agent spec JSON:\n{spec.get('spec')}",
-    )
+    try:
+        system_prompt = await complete_text(
+            PROMPT_GENERATION_SYSTEM,
+            f"Agent spec JSON:\n{json.dumps(spec.get('spec'), ensure_ascii=False)}",
+        )
+    except Exception as e:
+        logger.exception("Prompt generation failed")
+        raise HTTPException(status_code=502, detail=f"Prompt generation failed: {type(e).__name__}")
     prompt = PromptVersion(
         org_id=org_id,
         agent_definition_id=payload.agent_definition_id,
@@ -171,9 +195,13 @@ async def generate_tools(payload: GenerateToolsRequest, request: Request):
     spec = await cosmos_service.get_work_spec(payload.work_spec_id, org_id)
     if not spec:
         raise HTTPException(status_code=404, detail="Work spec not found")
-    data = await complete_json(TOOL_GENERATION_SYSTEM, f"Agent spec JSON:\n{spec.get('spec')}")
+    try:
+        data = await complete_json(TOOL_GENERATION_SYSTEM, f"Agent spec JSON:\n{json.dumps(spec.get('spec'), ensure_ascii=False)}")
+    except Exception as e:
+        logger.exception("Tool generation failed")
+        raise HTTPException(status_code=502, detail=f"Tool generation failed: {type(e).__name__}")
     docs = []
-    for item in data.get("tools", []):
+    for item in _items(data, "tools"):
         status = item.get("status", "placeholder")
         if status not in ("placeholder", "in_progress", "live"):
             status = "placeholder"
@@ -209,12 +237,16 @@ async def generate_test_cases(payload: GenerateTestsRequest, request: Request):
         raise HTTPException(status_code=404, detail="Work spec not found")
     prompt = await _latest_prompt(org_id, payload.agent_definition_id, payload.prompt_version_id)
     tools = await cosmos_service.list_tool_definitions(org_id, payload.agent_definition_id)
-    data = await complete_json(
-        TEST_GENERATION_SYSTEM,
-        f"Spec:\n{spec.get('spec')}\n\nPrompt:\n{(prompt or {}).get('system_prompt', '')}\n\nTools:\n{tools}",
-    )
+    try:
+        data = await complete_json(
+            TEST_GENERATION_SYSTEM,
+            f"Spec:\n{json.dumps(spec.get('spec'), ensure_ascii=False)}\n\nPrompt:\n{(prompt or {}).get('system_prompt', '')}\n\nTools:\n{json.dumps(tools, ensure_ascii=False)}",
+        )
+    except Exception as e:
+        logger.exception("Test case generation failed")
+        raise HTTPException(status_code=502, detail=f"Test case generation failed: {type(e).__name__}")
     docs = []
-    for item in data.get("test_cases", []):
+    for item in _items(data, "test_cases"):
         test_case = TestCase(
             org_id=org_id,
             agent_definition_id=payload.agent_definition_id,
@@ -243,35 +275,61 @@ async def run_tests(payload: RunTestsRequest, request: Request):
     pass_count = 0
     fail_count = 0
     for case in test_cases[:25]:
-        user_turns = [turn.get("user", "") for turn in case.get("conversation", []) if turn.get("user")]
-        query = "\n".join(user_turns) or case.get("scenario", "")
-        docs = await search_service.hybrid_search(
-            query=query,
-            org_id=org_id,
-            agent_id=org_id,
-            customer_id=agent.get("customer_id"),
-            top=5,
-        )
-        answer = await generate_rag_response_full(
-            query=query,
-            context_docs=docs,
-            system_prompt=(prompt or {}).get("system_prompt") or agent.get("instructions"),
-        )
-        judge = await complete_json(
-            "You are a strict conversational AI test judge. Return JSON only.",
-            f"Test case:\n{case}\n\nActual answer:\n{answer}\n\nReturn keys: overall_passed, score_0_to_5, failure_category, reasoning.",
-            max_tokens=1200,
-        )
+        conversation_log = []
+        history = []
+        turns = [turn for turn in case.get("conversation", []) if turn.get("user")]
+        if not turns:
+            turns = [{"user": case.get("scenario", "")}]
+        for turn in turns:
+            query = turn.get("user", "")
+            docs = await search_service.hybrid_search(
+                query=query,
+                org_id=org_id,
+                agent_id=org_id,
+                customer_id=agent.get("customer_id"),
+                top=5,
+            )
+            answer = await generate_rag_response_full(
+                query=query,
+                context_docs=docs,
+                conversation_history=history,
+                system_prompt=(prompt or {}).get("system_prompt") or agent.get("instructions"),
+            )
+            conversation_log.append({
+                "user": query,
+                "assistant": answer,
+                "expected_behaviour": turn.get("expected_behaviour"),
+                "sources": [{"filename": d.get("filename"), "source_path": d.get("source_path")} for d in docs],
+            })
+            history.extend([
+                {"role": "user", "content": query},
+                {"role": "assistant", "content": answer},
+            ])
+        try:
+            judge = await complete_json(
+                "You are a strict conversational AI test judge. Return JSON only.",
+                f"Test case:\n{json.dumps(case, ensure_ascii=False)}\n\nActual conversation log:\n{json.dumps(conversation_log, ensure_ascii=False)}\n\nReturn keys: overall_passed, score_0_to_5, failure_category, reasoning.",
+                max_tokens=1200,
+            )
+        except Exception as e:
+            logger.exception("Test judge failed")
+            judge = {"overall_passed": False, "score_0_to_5": 0, "failure_category": "judge_error", "reasoning": type(e).__name__}
         passed = bool(judge.get("overall_passed"))
         pass_count += 1 if passed else 0
         fail_count += 0 if passed else 1
-        results.append({"test_case_id": case["id"], "answer": answer, "judge": judge, "passed": passed})
+        results.append({"test_case_id": case["id"], "conversation_log": conversation_log, "judge": judge, "passed": passed})
 
-    blind_spot_report = await complete_json(
-        BLIND_SPOT_SYSTEM,
-        f"Agent: {agent}\nPrompt: {prompt}\nTest results: {results}",
-        max_tokens=2000,
-    ) if results else None
+    blind_spot_report = None
+    if results:
+        try:
+            blind_spot_report = await complete_json(
+                BLIND_SPOT_SYSTEM,
+                f"Agent: {json.dumps(agent, ensure_ascii=False)}\nPrompt: {json.dumps(prompt, ensure_ascii=False)}\nTest results: {json.dumps(results, ensure_ascii=False)}",
+                max_tokens=2000,
+            )
+        except Exception as e:
+            logger.exception("Blind spot generation failed")
+            blind_spot_report = {"summary": "Blind spot generation failed", "error": type(e).__name__, "ready_for_pilot": False}
     run = TestRun(
         org_id=org_id,
         agent_definition_id=payload.agent_definition_id,
@@ -301,3 +359,26 @@ async def get_test_run(test_run_id: str, request: Request):
     if not run:
         raise HTTPException(status_code=404, detail="Test run not found")
     return run
+
+
+@router.get("/promptfoo")
+async def promptfoo_config(request: Request, agent_definition_id: str, prompt_version_id: str | None = None):
+    auth = get_auth_user(request)
+    org_id = require_org(auth)
+    agent = await _agent(org_id, agent_definition_id)
+    prompt = await _latest_prompt(org_id, agent_definition_id, prompt_version_id)
+    tests = await cosmos_service.list_test_cases(org_id, agent_definition_id)
+    cases = []
+    for test in tests:
+        user_turns = [turn.get("user", "") for turn in test.get("conversation", []) if turn.get("user")]
+        cases.append({
+            "description": test.get("scenario"),
+            "vars": {"query": "\n".join(user_turns) or test.get("scenario", "")},
+            "assert": [{"type": "llm-rubric", "value": "\n".join(test.get("pass_criteria") or [])}],
+        })
+    return {
+        "description": f"Wasup agent eval: {agent.get('name')}",
+        "prompts": [(prompt or {}).get("system_prompt") or agent.get("instructions") or "{{query}}"],
+        "providers": ["azureopenai:chat:"],
+        "tests": cases,
+    }

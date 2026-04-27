@@ -1,6 +1,14 @@
-import { useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Upload, FileText, CheckCircle, XCircle, Loader2, Trash2 } from 'lucide-react';
-import { uploadDocuments, type Customer, type KnowledgeScope, type UploadResult, type Language } from '../services/api';
+import {
+  listKnowledgeSources,
+  uploadDocuments,
+  type Customer,
+  type KnowledgeScope,
+  type KnowledgeSource,
+  type UploadResult,
+  type Language,
+} from '../services/api';
 
 interface Props {
   agentId: string;
@@ -14,8 +22,38 @@ export default function UploadPanel({ agentId, language, customers = [], selecte
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [results, setResults] = useState<UploadResult[]>([]);
+  const [sources, setSources] = useState<KnowledgeSource[]>([]);
+  const [isLoadingSources, setIsLoadingSources] = useState(false);
   const [scope, setScope] = useState<KnowledgeScope>(selectedCustomerId ? 'customer' : 'org_wide');
   const [customerId, setCustomerId] = useState(selectedCustomerId || '');
+
+  useEffect(() => {
+    if (selectedCustomerId) {
+      setScope('customer');
+      setCustomerId(selectedCustomerId);
+    }
+  }, [selectedCustomerId]);
+
+  const loadSources = useCallback(async () => {
+    setIsLoadingSources(true);
+    try {
+      setSources(await listKnowledgeSources({
+        scope,
+        customerId: scope === 'customer' ? customerId : undefined,
+        agentDefinitionId: selectedAgentId,
+        limit: 100,
+      }));
+    } catch {}
+    setIsLoadingSources(false);
+  }, [scope, customerId, selectedAgentId]);
+
+  useEffect(() => {
+    if (scope === 'customer' && !customerId) {
+      setSources([]);
+      return;
+    }
+    loadSources();
+  }, [loadSources, scope, customerId]);
 
   const handleFiles = useCallback(async (files: File[]) => {
     if (!files.length) return;
@@ -30,9 +68,10 @@ export default function UploadPanel({ agentId, language, customers = [], selecte
         selectedAgentId,
       );
       setResults(prev => [...res, ...prev]);
+      await loadSources();
     } catch {}
     setIsUploading(false);
-  }, [agentId, scope, customerId, selectedAgentId]);
+  }, [agentId, scope, customerId, selectedAgentId, loadSources]);
 
   return (
     <div className="flex flex-col h-full">
@@ -111,6 +150,42 @@ export default function UploadPanel({ agentId, language, customers = [], selecte
             ))}
           </div>
         )}
+
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-zinc-400">
+              {language === 'fi' ? 'Tallennettu konteksti' : 'Persisted context'}
+            </span>
+            <button onClick={loadSources} className="text-[11px] text-zinc-600 hover:text-zinc-400">
+              {language === 'fi' ? 'Päivitä' : 'Refresh'}
+            </button>
+          </div>
+          {isLoadingSources && (
+            <div className="flex items-center gap-2 text-xs text-zinc-500 px-3 py-2">
+              <Loader2 size={13} className="animate-spin" />
+              {language === 'fi' ? 'Ladataan...' : 'Loading...'}
+            </div>
+          )}
+          {!isLoadingSources && sources.length === 0 && (
+            <div className="px-3 py-4 bg-zinc-900 rounded-lg border border-zinc-800/60 text-xs text-zinc-600">
+              {scope === 'customer' && !customerId
+                ? language === 'fi' ? 'Valitse asiakas nähdäksesi kontekstin.' : 'Select a customer to see context.'
+                : language === 'fi' ? 'Ei tallennettuja lähteitä.' : 'No persisted sources yet.'}
+            </div>
+          )}
+          {sources.map(source => (
+            <div key={source.id} className="flex items-center gap-3 px-3 py-2.5 bg-zinc-900 rounded-lg border border-zinc-800/60">
+              <FileText size={15} className="text-zinc-500 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-[13px] text-zinc-300 truncate">{source.filename}</p>
+                <p className="text-[11px] text-zinc-600">
+                  {source.source_type} · {source.chunks_created} chunks · {source.scope === 'customer' ? customers.find(c => c.id === source.customer_id)?.name || 'Customer' : 'Org-wide'}
+                </p>
+              </div>
+              <CheckCircle size={15} className="text-green-500" />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

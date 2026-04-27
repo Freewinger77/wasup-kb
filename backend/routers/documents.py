@@ -2,7 +2,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
 from typing import List
 
 from backend.auth import get_auth_user, require_org
-from backend.models.schemas import DocumentUploadResponse
+from backend.models.schemas import DocumentUploadResponse, KnowledgeScope, KnowledgeSource
 from backend.services.document_parser import parse_file, supported_extensions
 from backend.services.chunker import split_text_into_chunks
 from backend.services.embedder import generate_embeddings_batch
@@ -13,6 +13,29 @@ from backend.services.cosmos_db import cosmos_service
 import uuid
 
 router = APIRouter()
+
+
+@router.get("/sources")
+async def list_sources(
+    request: Request,
+    scope: str | None = None,
+    customer_id: str | None = None,
+    agent_definition_id: str | None = None,
+    limit: int = 100,
+):
+    auth = get_auth_user(request)
+    org_id = require_org(auth)
+    if scope and scope not in ("org_wide", "customer"):
+        raise HTTPException(status_code=400, detail="scope must be 'org_wide' or 'customer'")
+    if customer_id and not await cosmos_service.get_customer(customer_id, org_id):
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return await cosmos_service.list_knowledge_sources(
+        org_id,
+        scope=scope,
+        customer_id=customer_id,
+        agent_definition_id=agent_definition_id,
+        limit=limit,
+    )
 
 
 @router.post("/upload", response_model=list[DocumentUploadResponse])
@@ -87,6 +110,17 @@ async def upload_documents(
                 scope=scope,
                 agent_definition_id=agent_definition_id,
             )
+            await cosmos_service.upsert_knowledge_source(KnowledgeSource(
+                org_id=org_id,
+                source_type="upload",
+                source_path=blob_name,
+                filename=filename,
+                scope=KnowledgeScope(scope),
+                customer_id=customer_id,
+                agent_definition_id=agent_definition_id,
+                status="indexed",
+                chunks_created=count,
+            ).model_dump())
 
             results.append(DocumentUploadResponse(
                 document_id=doc_id,

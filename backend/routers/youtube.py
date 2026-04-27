@@ -21,6 +21,7 @@ from backend.services.chunker import split_text_into_chunks
 from backend.services.embedder import generate_embeddings_batch
 from backend.services.azure_search import search_service
 from backend.services.cosmos_db import cosmos_service
+from backend.models.schemas import KnowledgeScope, KnowledgeSource
 
 router = APIRouter()
 
@@ -168,6 +169,18 @@ async def ingest_video(request: VideoRequest, request_obj: Request):
         scope=request.scope,
         agent_definition_id=request.agent_definition_id,
     )
+    await cosmos_service.upsert_knowledge_source(KnowledgeSource(
+        org_id=org_id,
+        source_type="youtube_video",
+        source_path=video_url,
+        filename=f"YouTube: {title}",
+        scope=KnowledgeScope(request.scope),
+        customer_id=request.customer_id,
+        agent_definition_id=request.agent_definition_id,
+        status="indexed",
+        chunks_created=count,
+        metadata={"video_id": video_id, "transcript_length": len(transcript)},
+    ).model_dump())
 
     return VideoResult(
         video_id=video_id,
@@ -289,6 +302,18 @@ async def _process_channel(
                         scope=scope,
                         agent_definition_id=agent_definition_id,
                     )
+                    await cosmos_service.upsert_knowledge_source(KnowledgeSource(
+                        org_id=agent_id,
+                        source_type="youtube_channel",
+                        source_path=video_url,
+                        filename=f"YouTube: {title}",
+                        scope=KnowledgeScope(scope),
+                        customer_id=customer_id,
+                        agent_definition_id=agent_definition_id,
+                        status="indexed",
+                        chunks_created=count,
+                        metadata={"video_id": vid_id, "job_id": job_id, "transcript_length": len(transcript)},
+                    ).model_dump())
                     job["results"].append(VideoResult(
                         video_id=vid_id, title=title, status="success",
                         chunks_created=count, transcript_length=len(transcript),

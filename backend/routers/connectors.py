@@ -25,6 +25,7 @@ from backend.services.embedder import generate_embeddings_batch
 from backend.services.azure_search import search_service
 from backend.services.azure_blob import blob_service
 from backend.services.cosmos_db import cosmos_service
+from backend.models.schemas import KnowledgeScope, KnowledgeSource
 
 router = APIRouter()
 
@@ -220,6 +221,18 @@ async def _process_drive(
                         scope=scope,
                         agent_definition_id=agent_definition_id,
                     )
+                    await cosmos_service.upsert_knowledge_source(KnowledgeSource(
+                        org_id=agent_id,
+                        source_type="google_drive",
+                        source_path=blob_name or file_info["path"],
+                        filename=filename,
+                        scope=KnowledgeScope(scope),
+                        customer_id=customer_id,
+                        agent_definition_id=agent_definition_id,
+                        status="indexed",
+                        chunks_created=len(chunks),
+                        metadata={"drive_path": file_info.get("path")},
+                    ).model_dump())
 
                 connector["processed_files"] += 1
                 if connector["processed_files"] % 5 == 0:

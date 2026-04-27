@@ -2,6 +2,9 @@ from openai import AsyncAzureOpenAI
 from backend.config import settings
 from typing import AsyncIterator
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 _client = AsyncAzureOpenAI(
     api_key=settings.AZURE_OPENAI_CHAT_KEY,
@@ -103,28 +106,44 @@ async def generate_rag_response_full(
 
 
 async def complete_json(system_prompt: str, user_prompt: str, max_tokens: int = 4000) -> dict:
-    response = await _client.chat.completions.create(
-        model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT,
-        messages=[
+    kwargs = {
+        "model": settings.AZURE_OPENAI_CHAT_DEPLOYMENT,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        response_format={"type": "json_object"},
-        temperature=0.2,
-        max_tokens=max_tokens,
-    )
+        "response_format": {"type": "json_object"},
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
+    }
+    try:
+        response = await _client.chat.completions.create(**kwargs)
+    except Exception as e:
+        if "max_tokens" not in str(e):
+            raise
+        logger.info("Retrying JSON completion with max_completion_tokens")
+        kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
+        response = await _client.chat.completions.create(**kwargs)
     content = response.choices[0].message.content or "{}"
     return json.loads(content)
 
 
 async def complete_text(system_prompt: str, user_prompt: str, max_tokens: int = 3000) -> str:
-    response = await _client.chat.completions.create(
-        model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT,
-        messages=[
+    kwargs = {
+        "model": settings.AZURE_OPENAI_CHAT_DEPLOYMENT,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.3,
-        max_tokens=max_tokens,
-    )
+        "temperature": 0.3,
+        "max_tokens": max_tokens,
+    }
+    try:
+        response = await _client.chat.completions.create(**kwargs)
+    except Exception as e:
+        if "max_tokens" not in str(e):
+            raise
+        logger.info("Retrying text completion with max_completion_tokens")
+        kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
+        response = await _client.chat.completions.create(**kwargs)
     return response.choices[0].message.content or ""

@@ -10,6 +10,11 @@ class Language(str, Enum):
     FI = "fi"
 
 
+class KnowledgeScope(str, Enum):
+    ORG_WIDE = "org_wide"
+    CUSTOMER = "customer"
+
+
 class ChatMessage(BaseModel):
     role: str = Field(..., description="'user' or 'assistant'")
     content: str
@@ -68,6 +73,22 @@ class DocumentUploadResponse(BaseModel):
     customer_id: Optional[str] = None
 
 
+class KnowledgeSource(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    org_id: str
+    source_type: str
+    source_path: str
+    filename: str
+    scope: KnowledgeScope = KnowledgeScope.ORG_WIDE
+    customer_id: Optional[str] = None
+    agent_definition_id: Optional[str] = None
+    status: str = "indexed"
+    chunks_created: int = 0
+    metadata: dict[str, Any] = {}
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class ChatSession(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     agent_id: str
@@ -83,11 +104,6 @@ class AgentProfile(BaseModel):
     name: str
     preferred_language: Language = Language.EN
     created_at: datetime = Field(default_factory=datetime.utcnow)
-
-
-class KnowledgeScope(str, Enum):
-    ORG_WIDE = "org_wide"
-    CUSTOMER = "customer"
 
 
 class Customer(BaseModel):

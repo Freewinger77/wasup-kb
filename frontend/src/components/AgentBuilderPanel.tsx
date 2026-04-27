@@ -7,6 +7,7 @@ import {
   generateTestCases,
   generateTools,
   generateWorkSpec,
+  getPromptfooConfig,
   listAgents,
   listPrompts,
   listTestCases,
@@ -50,7 +51,9 @@ export default function AgentBuilderPanel({
   const [agentName, setAgentName] = useState('');
   const [discoveryText, setDiscoveryText] = useState('');
   const [sandboxInput, setSandboxInput] = useState('');
-  const [sandboxAnswer, setSandboxAnswer] = useState('');
+  const [sandboxMessages, setSandboxMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
+  const [sandboxSessionId, setSandboxSessionId] = useState<string | undefined>();
+  const [error, setError] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
 
   const activeAgent = agents.find(a => a.id === selectedAgentId);
@@ -77,7 +80,7 @@ export default function AgentBuilderPanel({
         setTools(toolList);
         setTests(testList);
       }
-    } catch {}
+    } catch (e: any) { setError(e.message || 'Failed to load builder data'); }
     setBusy(null);
   };
 
@@ -96,7 +99,7 @@ export default function AgentBuilderPanel({
       setAgentName('');
       onSelectAgent(agent.id);
       await load(agent.id);
-    } catch {}
+    } catch (e: any) { setError(e.message || 'Failed to create agent'); }
     setBusy(null);
   };
 
@@ -112,7 +115,7 @@ export default function AgentBuilderPanel({
         industry_hint: activeCustomer?.industry,
       });
       setWorkSpecs([spec, ...workSpecs]);
-    } catch {}
+    } catch (e: any) { setError(e.message || 'Failed to generate work spec'); }
     setBusy(null);
   };
 
@@ -126,7 +129,8 @@ export default function AgentBuilderPanel({
       ]);
       setPrompts([prompt, ...prompts]);
       setTools(generatedTools);
-    } catch {}
+      await load(activeAgent.id);
+    } catch (e: any) { setError(e.message || 'Failed to generate prompt/tools'); }
     setBusy(null);
   };
 
@@ -136,7 +140,8 @@ export default function AgentBuilderPanel({
     try {
       const generated = await generateTestCases(activeAgent.id, activeSpec.id, activePrompt?.id);
       setTests(generated);
-    } catch {}
+      await load(activeAgent.id);
+    } catch (e: any) { setError(e.message || 'Failed to generate tests'); }
     setBusy(null);
   };
 
@@ -145,7 +150,7 @@ export default function AgentBuilderPanel({
     setBusy('run');
     try {
       setLastRun(await runTestCases(activeAgent.id, activePrompt?.id));
-    } catch {}
+    } catch (e: any) { setError(e.message || 'Failed to run tests'); }
     setBusy(null);
   };
 
@@ -154,29 +159,58 @@ export default function AgentBuilderPanel({
     setBusy('whatsapp');
     try {
       await createWhatsAppTestDeploy(activeAgent.id, activePrompt?.id);
-    } catch {}
+    } catch (e: any) { setError(e.message || 'Failed to create WhatsApp deploy'); }
+    setBusy(null);
+  };
+
+  const downloadPromptfoo = async () => {
+    if (!activeAgent) return;
+    setBusy('promptfoo');
+    try {
+      const config = await getPromptfooConfig(activeAgent.id, activePrompt?.id);
+      const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${activeAgent.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-promptfoo.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) { setError(e.message || 'Failed to export promptfoo config'); }
     setBusy(null);
   };
 
   const sandbox = async () => {
     if (!sandboxInput.trim()) return;
-    setSandboxAnswer('');
+    const userText = sandboxInput.trim();
+    setSandboxMessages(prev => [...prev, { role: 'user', content: userText }, { role: 'assistant', content: '' }]);
+    setSandboxInput('');
     setBusy('sandbox');
     try {
       await streamChat(
         {
-          message: sandboxInput,
+          message: userText,
           agent_id: orgId,
+          session_id: sandboxSessionId,
           language,
           customer_id: activeAgent?.customer_id || selectedCustomerId,
           agent_definition_id: activeAgent?.id,
         },
-        () => {},
-        token => setSandboxAnswer(prev => prev + token),
+        meta => setSandboxSessionId(meta.session_id),
+        token => setSandboxMessages(prev => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === 'assistant') last.content += token;
+          return next;
+        }),
         () => setBusy(null),
       );
     } catch {
-      setSandboxAnswer('Sandbox request failed.');
+      setSandboxMessages(prev => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role === 'assistant') last.content = 'Sandbox request failed.';
+        return next;
+      });
       setBusy(null);
     }
   };
@@ -218,6 +252,12 @@ export default function AgentBuilderPanel({
       </aside>
 
       <main className="flex-1 overflow-y-auto p-6 space-y-5">
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/30 text-red-300 rounded-xl px-4 py-3 text-sm flex items-start justify-between gap-3">
+            <span>{error}</span>
+            <button onClick={() => setError('')} className="text-red-300/70 hover:text-red-200">Dismiss</button>
+          </div>
+        )}
         {!activeAgent && (
           <div className="h-full flex items-center justify-center text-zinc-500 text-sm">
             {language === 'fi' ? 'Luo agentti aloittaaksesi.' : 'Create an agent to start.'}
@@ -253,16 +293,93 @@ export default function AgentBuilderPanel({
 
             <section className="grid grid-cols-2 gap-4">
               <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
-                <h3 className="text-sm font-semibold text-white">Sandbox playground</h3>
+                <h3 className="text-sm font-semibold text-white">Generated test cases</h3>
+                <div className="max-h-72 overflow-y-auto space-y-2">
+                  {tests.length === 0 && <p className="text-xs text-zinc-600">No tests generated yet.</p>}
+                  {tests.map(test => (
+                    <div key={test.id} className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm text-zinc-200 truncate">{test.scenario || 'Untitled scenario'}</p>
+                        <span className="text-[10px] uppercase tracking-wide text-indigo-300 bg-indigo-500/10 rounded-full px-2 py-0.5">{test.category}</span>
+                      </div>
+                      <p className="text-xs text-zinc-500 mt-2">{test.pass_criteria?.slice(0, 2).join(' · ')}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
+                <h3 className="text-sm font-semibold text-white">Latest test run</h3>
+                {!lastRun && <p className="text-xs text-zinc-600">Run tests to see transcripts and judge output.</p>}
+                {lastRun && (
+                  <div className="space-y-3 max-h-72 overflow-y-auto">
+                    <div className="text-xs text-zinc-400">
+                      {lastRun.pass_count} passed / {lastRun.fail_count} failed
+                    </div>
+                    {lastRun.results.map((result: any, idx: number) => (
+                      <div key={idx} className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className={result.passed ? 'text-green-400 text-xs' : 'text-red-400 text-xs'}>
+                            {result.passed ? 'Passed' : 'Failed'}
+                          </span>
+                          <span className="text-xs text-zinc-600">Score {result.judge?.score_0_to_5 ?? '-'}/5</span>
+                        </div>
+                        {(result.conversation_log || []).map((turn: any, turnIdx: number) => (
+                          <div key={turnIdx} className="space-y-1">
+                            <p className="text-xs text-indigo-300">User: {turn.user}</p>
+                            <p className="text-xs text-zinc-300 whitespace-pre-wrap">Agent: {turn.assistant}</p>
+                          </div>
+                        ))}
+                        {result.judge?.reasoning && <p className="text-xs text-zinc-500">{result.judge.reasoning}</p>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section className="grid grid-cols-2 gap-4">
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-white">Sandbox playground</h3>
+                  <button
+                    onClick={() => { setSandboxMessages([]); setSandboxSessionId(undefined); }}
+                    className="text-[11px] text-zinc-600 hover:text-zinc-400"
+                  >
+                    New memory
+                  </button>
+                </div>
+                <div className="h-64 overflow-y-auto bg-zinc-950 border border-zinc-800 rounded-lg p-3 space-y-3">
+                  {sandboxMessages.length === 0 && (
+                    <p className="text-xs text-zinc-600">Chat with the generated agent. This keeps memory until you click New memory.</p>
+                  )}
+                  {sandboxMessages.map((msg, idx) => (
+                    <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap ${
+                        msg.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-md' : 'bg-zinc-900 text-zinc-200 border border-zinc-800 rounded-tl-md'
+                      }`}>
+                        {msg.content || (busy === 'sandbox' && idx === sandboxMessages.length - 1 ? 'Thinking...' : '')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
                 <div className="flex gap-2">
-                  <input value={sandboxInput} onChange={e => setSandboxInput(e.target.value)} className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white outline-none" placeholder="Ask the generated agent..." />
+                  <input
+                    value={sandboxInput}
+                    onChange={e => setSandboxInput(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sandbox()}
+                    className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white outline-none"
+                    placeholder="Ask the generated agent..."
+                  />
                   <button onClick={sandbox} disabled={busy === 'sandbox'} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg"><Send size={15} /></button>
                 </div>
-                <div className="min-h-28 bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-sm text-zinc-300 whitespace-pre-wrap">{sandboxAnswer || 'Sandbox answer will appear here.'}</div>
               </div>
               <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
                 <h3 className="text-sm font-semibold text-white">Deploy</h3>
                 <p className="text-xs text-zinc-500">Creates a WhatsApp deployment record for the provider adapter to claim.</p>
+                <button onClick={downloadPromptfoo} disabled={!tests.length || busy === 'promptfoo'} className="flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-900 disabled:text-zinc-600 text-white rounded-lg px-4 py-2 text-sm">
+                  {busy === 'promptfoo' ? <Loader2 size={14} className="animate-spin" /> : <FlaskConical size={14} />} Export promptfoo config
+                </button>
                 <button onClick={deployWhatsApp} disabled={!activePrompt || busy === 'whatsapp'} className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:bg-zinc-800 text-white rounded-lg px-4 py-2 text-sm">
                   {busy === 'whatsapp' ? <Loader2 size={14} className="animate-spin" /> : <Wrench size={14} />} Create WhatsApp test deploy
                 </button>
