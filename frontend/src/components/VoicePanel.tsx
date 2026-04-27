@@ -62,6 +62,15 @@ export default function VoicePanel({ agentId, language }: Props) {
   }
 
   // ---- TTS ----
+  // Pre-warm Audio context on user gesture to avoid autoplay blocks
+  const audioUnlockedRef = useRef(false);
+  function unlockAudio() {
+    if (audioUnlockedRef.current) return;
+    const a = new Audio();
+    a.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+    a.play().then(() => { a.pause(); audioUnlockedRef.current = true; }).catch(() => {});
+  }
+
   const doSpeak = useCallback(async (text: string) => {
     if (!text.trim()) { doResume(); return; }
     setP('speaking');
@@ -69,6 +78,7 @@ export default function VoicePanel({ agentId, language }: Props) {
     try {
       const blob = await synthesizeSpeech(text, language);
       if (phaseRef.current !== 'speaking') return;
+      if (!blob || blob.size === 0) { console.warn('TTS returned empty blob'); doResume(); return; }
       const url = URL.createObjectURL(blob);
       const a = new Audio(url);
       audioElRef.current = a;
@@ -78,9 +88,13 @@ export default function VoicePanel({ agentId, language }: Props) {
         if (phaseRef.current === 'speaking') doResume();
       };
       a.onended = done;
-      a.onerror = done;
-      await a.play();
-    } catch {
+      a.onerror = (e) => { console.error('Audio playback error:', e); done(); };
+      a.play().catch((err) => {
+        console.error('Audio play() rejected:', err);
+        done();
+      });
+    } catch (e) {
+      console.error('TTS failed:', e);
       if (phaseRef.current === 'speaking') doResume();
     }
   }, [language]);
@@ -249,6 +263,7 @@ export default function VoicePanel({ agentId, language }: Props) {
     setLiveText('');
     pendingRef.current = '';
     sessionRef.current = undefined;
+    unlockAudio();
 
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) { setError('Speech recognition not supported. Use Chrome or Edge.'); return; }
@@ -304,13 +319,16 @@ export default function VoicePanel({ agentId, language }: Props) {
   return (
     <div className="relative flex flex-col h-full overflow-hidden bg-zinc-950">
       {active && (
-        <div className="absolute inset-0 pointer-events-none">
-          <div className={`absolute bottom-0 left-1/2 -translate-x-1/2 w-[600px] h-[350px] rounded-full blur-[140px] transition-colors duration-1000 ${
-            phase === 'speaking' ? 'bg-indigo-600/40' :
-            phase === 'thinking' ? 'bg-amber-600/30' :
-            'bg-indigo-500/20'
-          }`} />
-        </div>
+        <div
+          className="absolute inset-0 pointer-events-none transition-opacity duration-1000"
+          style={{
+            background: phase === 'speaking'
+              ? 'radial-gradient(ellipse 80% 60% at 50% 100%, rgba(99,102,241,0.25) 0%, rgba(99,102,241,0.08) 40%, transparent 70%)'
+              : phase === 'thinking'
+              ? 'radial-gradient(ellipse 80% 60% at 50% 100%, rgba(217,119,6,0.18) 0%, rgba(217,119,6,0.06) 40%, transparent 70%)'
+              : 'radial-gradient(ellipse 80% 60% at 50% 100%, rgba(99,102,241,0.12) 0%, rgba(99,102,241,0.04) 40%, transparent 70%)',
+          }}
+        />
       )}
 
       <div className="relative z-10 flex flex-col h-full">

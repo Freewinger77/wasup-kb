@@ -1,13 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from contextlib import asynccontextmanager
 import os
 
-from backend.routers import chat, voice, connectors, documents, history, youtube
+from backend.routers import agents, builder, chat, connectors, customers, documents, history, voice, whatsapp, youtube
 from backend.services.azure_search import search_service
 from backend.services.cosmos_db import cosmos_service
+
+CANONICAL_HOST = "kb.wasup.co"
 
 
 @asynccontextmanager
@@ -34,6 +36,17 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def redirect_to_canonical(request: Request, call_next):
+    host = request.headers.get("host", "")
+    if host and host != CANONICAL_HOST and "azurewebsites.net" in host:
+        url = f"https://{CANONICAL_HOST}{request.url.path}"
+        if request.url.query:
+            url += f"?{request.url.query}"
+        return RedirectResponse(url, status_code=301)
+    return await call_next(request)
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "service": "wasup-kb"}
@@ -45,6 +58,10 @@ app.include_router(connectors.router, prefix="/api/connectors", tags=["Connector
 app.include_router(documents.router, prefix="/api/documents", tags=["Documents"])
 app.include_router(history.router, prefix="/api/history", tags=["History"])
 app.include_router(youtube.router, prefix="/api/youtube", tags=["YouTube"])
+app.include_router(customers.router, prefix="/api/customers", tags=["Customers"])
+app.include_router(agents.router, prefix="/api/agents", tags=["Agent Definitions"])
+app.include_router(builder.router, prefix="/api/builder", tags=["Agent Builder"])
+app.include_router(whatsapp.router, prefix="/api/whatsapp", tags=["WhatsApp"])
 
 static_dir = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 if os.path.isdir(static_dir):

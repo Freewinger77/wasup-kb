@@ -1,23 +1,38 @@
 import { useState, useCallback } from 'react';
 import { Upload, FileText, CheckCircle, XCircle, Loader2, Trash2 } from 'lucide-react';
-import { uploadDocuments, type UploadResult, type Language } from '../services/api';
+import { uploadDocuments, type Customer, type KnowledgeScope, type UploadResult, type Language } from '../services/api';
 
-interface Props { agentId: string; language: Language; }
+interface Props {
+  agentId: string;
+  language: Language;
+  customers?: Customer[];
+  selectedCustomerId?: string;
+  selectedAgentId?: string;
+}
 
-export default function UploadPanel({ agentId, language }: Props) {
+export default function UploadPanel({ agentId, language, customers = [], selectedCustomerId, selectedAgentId }: Props) {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [results, setResults] = useState<UploadResult[]>([]);
+  const [scope, setScope] = useState<KnowledgeScope>(selectedCustomerId ? 'customer' : 'org_wide');
+  const [customerId, setCustomerId] = useState(selectedCustomerId || '');
 
   const handleFiles = useCallback(async (files: File[]) => {
     if (!files.length) return;
+    if (scope === 'customer' && !customerId) return;
     setIsUploading(true);
     try {
-      const res = await uploadDocuments(files, agentId);
+      const res = await uploadDocuments(
+        files,
+        agentId,
+        scope,
+        scope === 'customer' ? customerId : undefined,
+        selectedAgentId,
+      );
       setResults(prev => [...res, ...prev]);
     } catch {}
     setIsUploading(false);
-  }, [agentId]);
+  }, [agentId, scope, customerId, selectedAgentId]);
 
   return (
     <div className="flex flex-col h-full">
@@ -29,6 +44,21 @@ export default function UploadPanel({ agentId, language }: Props) {
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+        <div className="flex gap-3">
+          <select value={scope} onChange={e => setScope(e.target.value as KnowledgeScope)}
+            className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white outline-none">
+            <option value="org_wide">{language === 'fi' ? 'Organisaation yhteinen' : 'Org-wide'}</option>
+            <option value="customer">{language === 'fi' ? 'Asiakas' : 'Customer'}</option>
+          </select>
+          {scope === 'customer' && (
+            <select value={customerId} onChange={e => setCustomerId(e.target.value)}
+              className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white outline-none">
+              <option value="">{language === 'fi' ? 'Valitse asiakas' : 'Select customer'}</option>
+              {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          )}
+        </div>
+
         <div
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
           onDragLeave={() => setIsDragging(false)}
@@ -48,7 +78,9 @@ export default function UploadPanel({ agentId, language }: Props) {
             {language === 'fi' ? 'Vedä ja pudota tiedostoja' : 'Drag and drop files here'}
           </p>
           <p className="text-[11px] text-zinc-600 mt-1">
-            {language === 'fi' ? 'tai klikkaa selataksesi' : 'or click to browse'}
+            {scope === 'customer' && customerId
+              ? `${language === 'fi' ? 'Kohde' : 'Target'}: ${customers.find(c => c.id === customerId)?.name || customerId}`
+              : language === 'fi' ? 'tai klikkaa selataksesi' : 'or click to browse'}
           </p>
         </div>
 

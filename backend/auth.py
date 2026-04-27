@@ -19,11 +19,11 @@ def _get_jwks_client() -> PyJWKClient:
     if _jwks_client is None:
         pk = settings.CLERK_PUBLISHABLE_KEY
         frontend_api = pk.split("_")[-1] if pk else ""
-        if frontend_api.endswith("$"):
-            frontend_api = frontend_api[:-1]
         import base64
         decoded = base64.b64decode(frontend_api + "==").decode()
+        decoded = decoded.rstrip("$")
         jwks_url = f"https://{decoded}/.well-known/jwks.json"
+        logger.info(f"JWKS URL: {jwks_url}")
         _jwks_client = PyJWKClient(jwks_url, cache_keys=True)
     return _jwks_client
 
@@ -62,8 +62,16 @@ def get_auth_user(request: Request) -> AuthUser:
         raise HTTPException(status_code=401, detail="Invalid token")
 
     user_id = payload.get("sub", "")
-    org_id = payload.get("org_id")
-    org_role = payload.get("org_role")
+
+    # Clerk v2 tokens nest org claims under "o"
+    o = payload.get("o") or {}
+    org_id = o.get("id") if isinstance(o, dict) else None
+    org_role = o.get("rol") if isinstance(o, dict) else None
+
+    # Fall back to v1 flat claims
+    if not org_id:
+        org_id = payload.get("org_id")
+        org_role = payload.get("org_role")
 
     return AuthUser(user_id=user_id, org_id=org_id, org_role=org_role)
 

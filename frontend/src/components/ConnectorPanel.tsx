@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useAuth } from '@clerk/clerk-react';
 import {
   FolderSync,
   Loader2,
@@ -8,54 +9,67 @@ import {
   FolderSearch,
   HardDrive,
   Mail,
+  Trash2,
 } from 'lucide-react';
 import {
   getGoogleAuthUrl,
   scanDrive,
   getConnectorStatus,
   listConnectors,
+  deleteConnector,
   type ConnectorStatus,
+  type Customer,
+  type KnowledgeScope,
   type Language,
 } from '../services/api';
 
 interface Props {
   agentId: string;
   language: Language;
+  customers?: Customer[];
+  selectedCustomerId?: string;
+  selectedAgentId?: string;
 }
 
-export default function ConnectorPanel({ agentId, language }: Props) {
+export default function ConnectorPanel({ agentId, language, customers = [], selectedCustomerId, selectedAgentId }: Props) {
+  const { isLoaded: authLoaded, isSignedIn } = useAuth();
   const [connectors, setConnectors] = useState<ConnectorStatus[]>([]);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [scope, setScope] = useState<KnowledgeScope>(selectedCustomerId ? 'customer' : 'org_wide');
+  const [customerId, setCustomerId] = useState(selectedCustomerId || '');
   const pollTimers = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
 
   useEffect(() => {
-    loadConnectors();
-
     const params = new URLSearchParams(window.location.search);
-    if (params.get('drive_connected') === 'true') {
-      window.history.replaceState({}, '', window.location.pathname);
-      loadConnectors();
-    }
     if (params.get('error')) {
       const err = params.get('error');
       const detail = params.get('detail') || '';
       setAuthError(`${err}${detail ? ': ' + detail : ''}`);
       window.history.replaceState({}, '', window.location.pathname);
     }
+    if (params.get('drive_connected') === 'true') {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+
+    if (authLoaded && isSignedIn) {
+      loadConnectors();
+    }
 
     return () => {
       pollTimers.current.forEach(t => clearInterval(t));
     };
-  }, [agentId]);
+  }, [agentId, authLoaded, isSignedIn]);
 
   const loadConnectors = async () => {
     setIsLoading(true);
     try {
       const list = await listConnectors(agentId);
       setConnectors(list);
-    } catch {}
+    } catch (e) {
+      console.error('Failed to load connectors:', e);
+    }
     setIsLoading(false);
   };
 
@@ -71,8 +85,16 @@ export default function ConnectorPanel({ agentId, language }: Props) {
   };
 
   const handleScan = async (connectorId: string, folderUrl?: string) => {
+    if (scope === 'customer' && !customerId) return;
     try {
-      await scanDrive(connectorId, agentId, folderUrl || undefined);
+      await scanDrive(
+        connectorId,
+        agentId,
+        folderUrl || undefined,
+        scope,
+        scope === 'customer' ? customerId : undefined,
+        selectedAgentId,
+      );
 
       setConnectors(prev =>
         prev.map(c => c.id === connectorId ? { ...c, status: 'scanning' } : c)
@@ -124,6 +146,21 @@ export default function ConnectorPanel({ agentId, language }: Props) {
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+        <div className="flex gap-3">
+          <select value={scope} onChange={e => setScope(e.target.value as KnowledgeScope)}
+            className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white outline-none">
+            <option value="org_wide">{language === 'fi' ? 'Organisaation yhteinen' : 'Org-wide'}</option>
+            <option value="customer">{language === 'fi' ? 'Asiakas' : 'Customer'}</option>
+          </select>
+          {scope === 'customer' && (
+            <select value={customerId} onChange={e => setCustomerId(e.target.value)}
+              className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white outline-none">
+              <option value="">{language === 'fi' ? 'Valitse asiakas' : 'Select customer'}</option>
+              {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          )}
+        </div>
+
         {authError && (
           <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-xs">
             <p className="font-medium mb-1">Connection failed</p>
@@ -164,6 +201,14 @@ export default function ConnectorPanel({ agentId, language }: Props) {
             language={language}
             statusIcon={statusIcon}
             onScan={handleScan}
+            onDelete={async (id) => {
+              try {
+                await deleteConnector(id);
+                setConnectors(prev => prev.filter(x => x.id !== id));
+              } catch (e) {
+                console.error('Delete failed:', e);
+              }
+            }}
           />
         ))}
 
@@ -187,26 +232,36 @@ function ConnectedDrive({
   language,
   statusIcon,
   onScan,
+  onDelete,
 }: {
   connector: ConnectorStatus;
   language: Language;
   statusIcon: (s: string) => React.ReactNode;
   onScan: (id: string, folderUrl?: string) => void;
+  onDelete: (id: string) => void;
 }) {
   const [folderUrl, setFolderUrl] = useState('');
   const [mode, setMode] = useState<'idle' | 'folder'>('idle');
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const isActive = ['scanning', 'processing'].includes(connector.status);
+  const email = connector.google_email && connector.google_email !== 'unknown'
+    ? connector.google_email
+    : null;
 
   return (
     <div className="p-4 bg-slate-800 rounded-xl border border-slate-700 space-y-3">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <div className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center">
-          <Mail size={18} className="text-blue-400" />
+        <div className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center shrink-0">
+          {email ? (
+            <span className="text-sm font-semibold text-blue-400">{email[0].toUpperCase()}</span>
+          ) : (
+            <Mail size={18} className="text-blue-400" />
+          )}
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-white truncate">
-            {connector.google_email || 'Google Drive'}
+            {email || 'Google Drive'}
           </p>
           <p className="text-xs text-slate-500">
             {connector.status === 'connected' && (language === 'fi' ? 'Yhdistetty, valmis skannaukseen' : 'Connected, ready to scan')}
@@ -216,7 +271,35 @@ function ConnectedDrive({
             {connector.status === 'error' && (language === 'fi' ? 'Virhe' : 'Error')}
           </p>
         </div>
-        {statusIcon(connector.status)}
+        <div className="flex items-center gap-2">
+          {statusIcon(connector.status)}
+          {!isActive && (
+            confirmDelete ? (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => onDelete(connector.id)}
+                  className="px-2 py-1 text-[11px] bg-red-500/20 text-red-400 rounded-md hover:bg-red-500/30 transition-colors"
+                >
+                  {language === 'fi' ? 'Poista' : 'Confirm'}
+                </button>
+                <button
+                  onClick={() => setConfirmDelete(false)}
+                  className="px-2 py-1 text-[11px] bg-zinc-700 text-zinc-400 rounded-md hover:bg-zinc-600 transition-colors"
+                >
+                  {language === 'fi' ? 'Peruuta' : 'Cancel'}
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="p-1.5 text-zinc-600 hover:text-red-400 transition-colors rounded-md hover:bg-red-500/10"
+                title={language === 'fi' ? 'Poista yhteys' : 'Remove connection'}
+              >
+                <Trash2 size={14} />
+              </button>
+            )
+          )}
+        </div>
       </div>
 
       {/* Progress */}

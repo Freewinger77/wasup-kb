@@ -11,10 +11,39 @@ from backend.services.cosmos_db import cosmos_service
 router = APIRouter()
 
 
+async def _resolve_agent_runtime(org_id: str, customer_id: str | None, agent_definition_id: str | None):
+    agent = None
+    system_prompt = None
+    include_org_wide = True
+    scoped_customer_id = customer_id
+    if agent_definition_id:
+        agent = await cosmos_service.get_agent_definition(agent_definition_id, org_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent definition not found")
+        scoped_customer_id = scoped_customer_id or agent.get("customer_id")
+        scope_policy = agent.get("scope_policy") or {}
+        include_org_wide = bool(scope_policy.get("include_org_wide", True))
+        active_prompt_version_id = agent.get("active_prompt_version_id")
+        if active_prompt_version_id:
+            prompt = await cosmos_service.get_prompt_version(active_prompt_version_id, org_id)
+            if prompt:
+                system_prompt = prompt.get("voice_prompt") or prompt.get("system_prompt")
+        if not system_prompt and agent.get("instructions"):
+            system_prompt = agent["instructions"]
+    if scoped_customer_id and not await cosmos_service.get_customer(scoped_customer_id, org_id):
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return agent, scoped_customer_id, include_org_wide, system_prompt
+
+
 @router.post("/")
 async def chat(request: ChatRequest, request_obj: Request):
     auth = get_auth_user(request_obj)
     org_id = require_org(auth)
+    _, customer_id, include_org_wide, system_prompt = await _resolve_agent_runtime(
+        org_id,
+        request.customer_id,
+        request.agent_definition_id,
+    )
 
     session_id = request.session_id
     conversation_history = []
@@ -29,10 +58,20 @@ async def chat(request: ChatRequest, request_obj: Request):
             language=request.language.value,
         )
         session_id = session["id"]
+        await cosmos_service.patch_session_context(
+            session_id,
+            org_id,
+            customer_id=customer_id,
+            agent_definition_id=request.agent_definition_id,
+        )
 
     context_docs = await search_service.hybrid_search(
         query=request.message,
         agent_id=org_id,
+        org_id=org_id,
+        customer_id=customer_id,
+        include_org_wide=include_org_wide,
+        agent_definition_id=request.agent_definition_id,
         top=5,
     )
 
@@ -49,6 +88,7 @@ async def chat(request: ChatRequest, request_obj: Request):
         context_docs=context_docs,
         conversation_history=conversation_history,
         voice_mode=request.voice_mode,
+        system_prompt=system_prompt,
     )
 
     await cosmos_service.add_message(
@@ -76,6 +116,11 @@ async def chat(request: ChatRequest, request_obj: Request):
 async def chat_stream(request: ChatRequest, request_obj: Request):
     auth = get_auth_user(request_obj)
     org_id = require_org(auth)
+    _, customer_id, include_org_wide, system_prompt = await _resolve_agent_runtime(
+        org_id,
+        request.customer_id,
+        request.agent_definition_id,
+    )
 
     session_id = request.session_id
     conversation_history = []
@@ -90,10 +135,20 @@ async def chat_stream(request: ChatRequest, request_obj: Request):
             language=request.language.value,
         )
         session_id = session["id"]
+        await cosmos_service.patch_session_context(
+            session_id,
+            org_id,
+            customer_id=customer_id,
+            agent_definition_id=request.agent_definition_id,
+        )
 
     context_docs = await search_service.hybrid_search(
         query=request.message,
         agent_id=org_id,
+        org_id=org_id,
+        customer_id=customer_id,
+        include_org_wide=include_org_wide,
+        agent_definition_id=request.agent_definition_id,
         top=5,
     )
 
@@ -119,6 +174,7 @@ async def chat_stream(request: ChatRequest, request_obj: Request):
             context_docs=context_docs,
             conversation_history=conversation_history,
             voice_mode=request.voice_mode,
+            system_prompt=system_prompt,
         ):
             full_response.append(token)
             yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"

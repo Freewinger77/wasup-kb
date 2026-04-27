@@ -8,8 +8,19 @@ class BlobStorageService:
         self._client = BlobServiceClient.from_connection_string(settings.AZURE_STORAGE_CONNECTION_STRING)
         self._container = settings.AZURE_STORAGE_CONTAINER
 
-    async def upload_file(self, filename: str, data: bytes, agent_id: str) -> str:
-        blob_name = f"{agent_id}/{uuid.uuid4()}/{filename}"
+    async def upload_file(
+        self,
+        filename: str,
+        data: bytes,
+        agent_id: str,
+        scope: str = "org_wide",
+        customer_id: str | None = None,
+    ) -> str:
+        if scope == "customer" and customer_id:
+            prefix = f"{agent_id}/customers/{customer_id}"
+        else:
+            prefix = f"{agent_id}/org-wide"
+        blob_name = f"{prefix}/{uuid.uuid4()}/{filename}"
         container_client = self._client.get_container_client(self._container)
         await container_client.upload_blob(name=blob_name, data=data, overwrite=True)
         return blob_name

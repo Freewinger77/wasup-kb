@@ -7,10 +7,12 @@ import type { Language } from '../services/api';
 interface Props {
   agentId: string;
   language: Language;
+  customerId?: string;
+  agentDefinitionId?: string;
 }
 
-export default function ChatPanel({ agentId, language }: Props) {
-  const { messages, isLoading, sendMessage, clearChat } = useChat(agentId, language);
+export default function ChatPanel({ agentId, language, customerId, agentDefinitionId }: Props) {
+  const { messages, isLoading, sendMessage, clearChat } = useChat(agentId, language, customerId, agentDefinitionId);
   const { speak, isSpeaking, stopSpeaking } = useVoice(agentId, language);
   const [input, setInput] = useState('');
   const endRef = useRef<HTMLDivElement>(null);

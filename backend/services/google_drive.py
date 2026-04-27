@@ -104,12 +104,18 @@ def _get_service_from_tokens(token_data: dict):
 
 def get_user_email(token_data: dict) -> str:
     import requests as _requests
-    resp = _requests.get(
-        "https://www.googleapis.com/oauth2/v2/userinfo",
-        headers={"Authorization": f"Bearer {token_data['token']}"},
-    )
-    if resp.ok:
-        return resp.json().get("email", "unknown")
+    access_token = token_data.get("token") or token_data.get("access_token", "")
+    try:
+        resp = _requests.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+        if resp.ok:
+            data = resp.json()
+            return data.get("email") or data.get("name") or "unknown"
+    except Exception:
+        pass
     return "unknown"
 
 

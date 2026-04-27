@@ -7,6 +7,8 @@ load_dotenv()
 class Settings:
     AZURE_OPENAI_ENDPOINT: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     AZURE_OPENAI_KEY: str = os.getenv("AZURE_OPENAI_KEY", "")
+    AZURE_OPENAI_CHAT_ENDPOINT: str = os.getenv("AZURE_OPENAI_CHAT_ENDPOINT", AZURE_OPENAI_ENDPOINT)
+    AZURE_OPENAI_CHAT_KEY: str = os.getenv("AZURE_OPENAI_CHAT_KEY", AZURE_OPENAI_KEY)
     AZURE_OPENAI_CHAT_DEPLOYMENT: str = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4o-2024-11-20")
     AZURE_OPENAI_EMBEDDING_DEPLOYMENT: str = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
 
@@ -31,6 +33,10 @@ class Settings:
 
     CLERK_SECRET_KEY: str = os.getenv("CLERK_SECRET_KEY", "")
     CLERK_PUBLISHABLE_KEY: str = os.getenv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "")
+
+    WEBSHARE_PROXY_USERNAME: str = os.getenv("WEBSHARE_PROXY_USERNAME", "")
+    WEBSHARE_PROXY_PASSWORD: str = os.getenv("WEBSHARE_PROXY_PASSWORD", "")
+    WEBSHARE_PROXY_LIST: str = os.getenv("WEBSHARE_PROXY_LIST", "")
 
 
 settings = Settings()

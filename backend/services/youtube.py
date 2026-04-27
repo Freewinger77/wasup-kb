@@ -272,21 +272,46 @@ def _load_cookies_into_session():
     return session
 
 
+_proxy_index = 0
+
+
 def _get_transcript_api():
-    """Get a configured YouTubeTranscriptApi instance with cookies."""
+    """Get a configured YouTubeTranscriptApi with rotating proxy support."""
+    global _proxy_index
     from youtube_transcript_api import YouTubeTranscriptApi
+    from backend.config import settings
+
+    if settings.WEBSHARE_PROXY_USERNAME and settings.WEBSHARE_PROXY_PASSWORD:
+        proxy_list = [p.strip() for p in settings.WEBSHARE_PROXY_LIST.split(",") if p.strip()] if settings.WEBSHARE_PROXY_LIST else []
+
+        if proxy_list:
+            from youtube_transcript_api.proxies import GenericProxyConfig
+            proxy_addr = proxy_list[_proxy_index % len(proxy_list)]
+            _proxy_index += 1
+            proxy_url = f"http://{settings.WEBSHARE_PROXY_USERNAME}:{settings.WEBSHARE_PROXY_PASSWORD}@{proxy_addr}"
+            logger.info(f"Using residential proxy {proxy_addr}")
+            return YouTubeTranscriptApi(
+                proxy_config=GenericProxyConfig(http_url=proxy_url, https_url=proxy_url)
+            )
+
+        try:
+            from youtube_transcript_api.proxies import WebshareProxyConfig
+            logger.info("Using Webshare rotating proxy")
+            return YouTubeTranscriptApi(
+                proxy_config=WebshareProxyConfig(
+                    proxy_username=settings.WEBSHARE_PROXY_USERNAME,
+                    proxy_password=settings.WEBSHARE_PROXY_PASSWORD,
+                )
+            )
+        except ImportError:
+            pass
+
     return YouTubeTranscriptApi(http_client=_load_cookies_into_session())
 
 
-def get_transcript_via_api(video_id: str, language: str = "en") -> Optional[str]:
-    """Use youtube-transcript-api v1.x with cookie-enabled session."""
-    try:
-        api = _get_transcript_api()
-    except ImportError:
-        return None
-
+def _fetch_with_api(api, video_id: str, language: str) -> Optional[str]:
+    """Attempt transcript fetch with a given api instance."""
     lang_codes = list(dict.fromkeys([language, "fi", "en"]))
-
     try:
         all_transcripts = list(api.list(video_id))
         if not all_transcripts:
@@ -317,9 +342,48 @@ def get_transcript_via_api(video_id: str, language: str = "en") -> Optional[str]
         parts = [s.text for s in fetched if hasattr(s, 'text')]
         text = " ".join(p.strip() for p in parts if p.strip())
         if text:
-            logger.info(f"youtube-transcript-api: {len(text)} chars for {video_id}")
             return text
+    except Exception as e:
+        logger.debug(f"Transcript attempt failed: {type(e).__name__}")
+        raise
+    return None
 
+
+def get_transcript_via_api(video_id: str, language: str = "en") -> Optional[str]:
+    """Use youtube-transcript-api with proxy rotation and retries."""
+    from youtube_transcript_api import YouTubeTranscriptApi
+    from backend.config import settings
+
+    proxy_list = []
+    if settings.WEBSHARE_PROXY_USERNAME and settings.WEBSHARE_PROXY_LIST:
+        proxy_list = [p.strip() for p in settings.WEBSHARE_PROXY_LIST.split(",") if p.strip()]
+
+    if proxy_list:
+        global _proxy_index
+        from youtube_transcript_api.proxies import GenericProxyConfig
+        attempts = min(len(proxy_list), 5)
+        for i in range(attempts):
+            proxy_addr = proxy_list[_proxy_index % len(proxy_list)]
+            _proxy_index += 1
+            proxy_url = f"http://{settings.WEBSHARE_PROXY_USERNAME}:{settings.WEBSHARE_PROXY_PASSWORD}@{proxy_addr}"
+            try:
+                api = YouTubeTranscriptApi(
+                    proxy_config=GenericProxyConfig(http_url=proxy_url, https_url=proxy_url)
+                )
+                text = _fetch_with_api(api, video_id, language)
+                if text:
+                    logger.info(f"Transcript via proxy {proxy_addr}: {len(text)} chars for {video_id}")
+                    return text
+            except Exception:
+                logger.debug(f"Proxy {proxy_addr} failed for {video_id}, trying next")
+                continue
+
+    try:
+        api = _get_transcript_api()
+        text = _fetch_with_api(api, video_id, language)
+        if text:
+            logger.info(f"Transcript direct: {len(text)} chars for {video_id}")
+            return text
     except Exception as e:
         logger.warning(f"youtube-transcript-api failed for {video_id}: {type(e).__name__}")
 

@@ -34,6 +34,9 @@ _pending_oauth: dict[str, dict] = {}
 
 class ScanDriveRequest(BaseModel):
     folder_url: Optional[str] = None
+    scope: str = "org_wide"
+    customer_id: Optional[str] = None
+    agent_definition_id: Optional[str] = None
 
 
 class ConnectorStatus(BaseModel):
@@ -46,6 +49,9 @@ class ConnectorStatus(BaseModel):
     processed_files: int = 0
     last_sync: Optional[str] = None
     error: Optional[str] = None
+    scope: str = "org_wide"
+    customer_id: Optional[str] = None
+    agent_definition_id: Optional[str] = None
 
 
 # ---- OAuth2 Flow ----
@@ -113,6 +119,12 @@ async def scan_drive(connector_id: str, request: ScanDriveRequest, request_obj: 
     connector = await cosmos_service.get_connector(connector_id, org_id)
     if not connector:
         raise HTTPException(status_code=404, detail="Connector not found")
+    if request.scope not in ("org_wide", "customer"):
+        raise HTTPException(status_code=400, detail="scope must be 'org_wide' or 'customer'")
+    if request.scope == "customer" and not request.customer_id:
+        raise HTTPException(status_code=400, detail="customer_id is required for customer scope")
+    if request.customer_id and not await cosmos_service.get_customer(request.customer_id, org_id):
+        raise HTTPException(status_code=404, detail="Customer not found")
 
     token_data = connector.get("token_data")
     if not token_data:
@@ -123,11 +135,23 @@ async def scan_drive(connector_id: str, request: ScanDriveRequest, request_obj: 
     connector["total_files"] = 0
     connector["processed_files"] = 0
     connector["error"] = None
+    connector["scope"] = request.scope
+    connector["customer_id"] = request.customer_id
+    connector["agent_definition_id"] = request.agent_definition_id
     await cosmos_service.upsert_connector(connector)
     _active_jobs[connector_id] = connector
 
     folder_id = extract_folder_id(request.folder_url) if request.folder_url else None
-    background_tasks.add_task(_process_drive, connector_id, token_data, org_id, folder_id)
+    background_tasks.add_task(
+        _process_drive,
+        connector_id,
+        token_data,
+        org_id,
+        folder_id,
+        request.scope,
+        request.customer_id,
+        request.agent_definition_id,
+    )
 
     return ConnectorStatus(
         id=connector_id,
@@ -135,10 +159,21 @@ async def scan_drive(connector_id: str, request: ScanDriveRequest, request_obj: 
         status="scanning",
         google_email=connector.get("google_email"),
         folder_url=request.folder_url,
+        scope=request.scope,
+        customer_id=request.customer_id,
+        agent_definition_id=request.agent_definition_id,
     )
 
 
-async def _process_drive(connector_id: str, token_data: dict, agent_id: str, folder_id: str | None):
+async def _process_drive(
+    connector_id: str,
+    token_data: dict,
+    agent_id: str,
+    folder_id: str | None,
+    scope: str = "org_wide",
+    customer_id: str | None = None,
+    agent_definition_id: str | None = None,
+):
     connector = _active_jobs.get(connector_id, {})
     try:
         if folder_id:
@@ -157,7 +192,13 @@ async def _process_drive(connector_id: str, token_data: dict, agent_id: str, fol
                     connector["processed_files"] += 1
                     continue
 
-                await blob_service.upload_file(filename, file_bytes, agent_id)
+                blob_name = await blob_service.upload_file(
+                    filename,
+                    file_bytes,
+                    agent_id,
+                    scope=scope,
+                    customer_id=customer_id,
+                )
 
                 text = parse_file(filename, file_bytes)
                 if not text.strip():
@@ -171,9 +212,13 @@ async def _process_drive(connector_id: str, token_data: dict, agent_id: str, fol
                         chunks=chunks,
                         embeddings=embeddings,
                         source_type="google_drive",
-                        source_path=file_info["path"],
+                        source_path=blob_name or file_info["path"],
                         filename=filename,
                         agent_id=agent_id,
+                        org_id=agent_id,
+                        customer_id=customer_id,
+                        scope=scope,
+                        agent_definition_id=agent_definition_id,
                     )
 
                 connector["processed_files"] += 1
@@ -213,6 +258,9 @@ async def get_connector_status(connector_id: str, request: Request):
             processed_files=c.get("processed_files", 0),
             last_sync=c.get("last_sync"),
             error=c.get("error"),
+            scope=c.get("scope", "org_wide"),
+            customer_id=c.get("customer_id"),
+            agent_definition_id=c.get("agent_definition_id"),
         )
 
     connector = await cosmos_service.get_connector(connector_id, org_id)
@@ -228,7 +276,22 @@ async def get_connector_status(connector_id: str, request: Request):
         processed_files=connector.get("processed_files", 0),
         last_sync=connector.get("last_sync"),
         error=connector.get("error"),
+        scope=connector.get("scope", "org_wide"),
+        customer_id=connector.get("customer_id"),
+        agent_definition_id=connector.get("agent_definition_id"),
     )
+
+
+@router.delete("/{connector_id}")
+async def delete_connector(connector_id: str, request: Request):
+    auth = get_auth_user(request)
+    org_id = require_org(auth)
+    connector = await cosmos_service.get_connector(connector_id, org_id)
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+    await cosmos_service.delete_connector(connector_id, org_id)
+    _active_jobs.pop(connector_id, None)
+    return {"status": "deleted"}
 
 
 @router.get("/")
@@ -248,6 +311,9 @@ async def list_connectors(request: Request):
             processed_files=c.get("processed_files", 0),
             last_sync=c.get("last_sync"),
             error=c.get("error"),
+            scope=c.get("scope", "org_wide"),
+            customer_id=c.get("customer_id"),
+            agent_definition_id=c.get("agent_definition_id"),
         )
         for c in connectors
     ]

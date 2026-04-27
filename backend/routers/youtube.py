@@ -1,9 +1,7 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
-from pydantic import BaseModel
-from typing import Optional
-from datetime import datetime
+from pydantic import BaseModel, Field
+from typing import Optional, Any
 import uuid
-import traceback
 import logging
 
 from backend.auth import get_auth_user, require_org
@@ -29,15 +27,52 @@ router = APIRouter()
 _channel_jobs: dict[str, dict] = {}
 
 
+def _result_to_dict(r: Any) -> dict:
+    if hasattr(r, "model_dump"):
+        return r.model_dump()
+    if isinstance(r, dict):
+        return r
+    return dict(r)
+
+
+def _job_to_cosmos_doc(job: dict) -> dict:
+    return {
+        "id": job["job_id"],
+        "job_id": job["job_id"],
+        "org_id": job["org_id"],
+        "channel_url": job["channel_url"],
+        "status": job["status"],
+        "scope": job.get("scope", "org_wide"),
+        "customer_id": job.get("customer_id"),
+        "agent_definition_id": job.get("agent_definition_id"),
+        "total_videos": job.get("total_videos", 0),
+        "processed_videos": job.get("processed_videos", 0),
+        "results": [_result_to_dict(x) for x in job.get("results", [])],
+        "error": job.get("error"),
+    }
+
+
+async def _persist_channel_job(job: dict) -> None:
+    if not job.get("org_id"):
+        return
+    await cosmos_service.upsert_youtube_channel_job(_job_to_cosmos_doc(job))
+
+
 class VideoRequest(BaseModel):
     url: str
     language: str = "en"
+    scope: str = "org_wide"
+    customer_id: Optional[str] = None
+    agent_definition_id: Optional[str] = None
 
 
 class ChannelRequest(BaseModel):
     url: str
     language: str = "en"
-    max_videos: int = 50
+    max_videos: int = Field(50, ge=1, le=500)
+    scope: str = "org_wide"
+    customer_id: Optional[str] = None
+    agent_definition_id: Optional[str] = None
 
 
 class VideoResult(BaseModel):
@@ -55,12 +90,44 @@ class ChannelJobStatus(BaseModel):
     total_videos: int = 0
     processed_videos: int = 0
     results: list[VideoResult] = []
+    error: Optional[str] = None
+    scope: str = "org_wide"
+    customer_id: Optional[str] = None
+    agent_definition_id: Optional[str] = None
+
+
+def _job_to_status(job: dict) -> ChannelJobStatus:
+    results_raw = job.get("results") or []
+    results = [VideoResult(**_result_to_dict(r)) for r in results_raw]
+    return ChannelJobStatus(
+        job_id=job["job_id"],
+        channel_url=job["channel_url"],
+        status=job["status"],
+        total_videos=job.get("total_videos", 0),
+        processed_videos=job.get("processed_videos", 0),
+        results=results,
+        error=job.get("error"),
+        scope=job.get("scope", "org_wide"),
+        customer_id=job.get("customer_id"),
+        agent_definition_id=job.get("agent_definition_id"),
+    )
+
+
+def _merge_job(mem: Optional[dict], stored: Optional[dict]) -> Optional[dict]:
+    """In-process dict is authoritative while the worker runs; Cosmos survives refresh/restart."""
+    return mem if mem is not None else stored
 
 
 @router.post("/video", response_model=VideoResult)
 async def ingest_video(request: VideoRequest, request_obj: Request):
     auth = get_auth_user(request_obj)
     org_id = require_org(auth)
+    if request.scope not in ("org_wide", "customer"):
+        raise HTTPException(status_code=400, detail="scope must be 'org_wide' or 'customer'")
+    if request.scope == "customer" and not request.customer_id:
+        raise HTTPException(status_code=400, detail="customer_id is required for customer scope")
+    if request.customer_id and not await cosmos_service.get_customer(request.customer_id, org_id):
+        raise HTTPException(status_code=404, detail="Customer not found")
 
     video_id = extract_video_id(request.url)
     if not video_id:
@@ -96,6 +163,10 @@ async def ingest_video(request: VideoRequest, request_obj: Request):
         source_path=video_url,
         filename=f"YouTube: {title}",
         agent_id=org_id,
+        org_id=org_id,
+        customer_id=request.customer_id,
+        scope=request.scope,
+        agent_definition_id=request.agent_definition_id,
     )
 
     return VideoResult(
@@ -111,6 +182,12 @@ async def ingest_video(request: VideoRequest, request_obj: Request):
 async def ingest_channel(request: ChannelRequest, request_obj: Request, background_tasks: BackgroundTasks):
     auth = get_auth_user(request_obj)
     org_id = require_org(auth)
+    if request.scope not in ("org_wide", "customer"):
+        raise HTTPException(status_code=400, detail="scope must be 'org_wide' or 'customer'")
+    if request.scope == "customer" and not request.customer_id:
+        raise HTTPException(status_code=400, detail="customer_id is required for customer scope")
+    if request.customer_id and not await cosmos_service.get_customer(request.customer_id, org_id):
+        raise HTTPException(status_code=404, detail="Customer not found")
 
     identifier = extract_channel_identifier(request.url)
     if not identifier:
@@ -119,27 +196,66 @@ async def ingest_channel(request: ChannelRequest, request_obj: Request, backgrou
     job_id = str(uuid.uuid4())
     job = {
         "job_id": job_id,
+        "org_id": org_id,
         "channel_url": request.url,
         "status": "scanning",
+        "scope": request.scope,
+        "customer_id": request.customer_id,
+        "agent_definition_id": request.agent_definition_id,
         "total_videos": 0,
         "processed_videos": 0,
         "results": [],
     }
     _channel_jobs[job_id] = job
+    await _persist_channel_job(job)
 
     background_tasks.add_task(
-        _process_channel, job_id, request.url, org_id, request.language, request.max_videos
+        _process_channel,
+        job_id,
+        request.url,
+        org_id,
+        request.language,
+        request.max_videos,
+        request.scope,
+        request.customer_id,
+        request.agent_definition_id,
     )
 
-    return ChannelJobStatus(**job)
+    return _job_to_status(job)
 
 
-async def _process_channel(job_id: str, channel_url: str, agent_id: str, language: str, max_videos: int):
-    job = _channel_jobs[job_id]
+async def _process_channel(
+    job_id: str,
+    channel_url: str,
+    agent_id: str,
+    language: str,
+    max_videos: int,
+    scope: str = "org_wide",
+    customer_id: str | None = None,
+    agent_definition_id: str | None = None,
+):
+    job = _channel_jobs.get(job_id)
+    if not job:
+        logger.error("Channel job %s missing from memory", job_id)
+        return
+    job["org_id"] = agent_id
+    job["scope"] = scope
+    job["customer_id"] = customer_id
+    job["agent_definition_id"] = agent_definition_id
+
     try:
-        videos = await get_channel_videos_async(channel_url, max_videos)
+        try:
+            videos = await get_channel_videos_async(channel_url, max_videos)
+        except Exception as e:
+            logger.exception("Channel video list failed for %s", channel_url)
+            job["status"] = "error"
+            job["error"] = str(e)
+            await _persist_channel_job(job)
+            return
+
         job["total_videos"] = len(videos)
         job["status"] = "processing"
+        await _persist_channel_job(job)
 
         for video_info in videos:
             vid_id = video_info["id"]
@@ -153,6 +269,7 @@ async def _process_channel(job_id: str, channel_url: str, agent_id: str, languag
                         video_id=vid_id, title=title, status="no_transcript",
                     ))
                     job["processed_videos"] += 1
+                    await _persist_channel_job(job)
                     continue
 
                 full_text = f"YouTube Video: {title}\n\n{transcript}"
@@ -167,6 +284,10 @@ async def _process_channel(job_id: str, channel_url: str, agent_id: str, languag
                         source_path=video_url,
                         filename=f"YouTube: {title}",
                         agent_id=agent_id,
+                        org_id=agent_id,
+                        customer_id=customer_id,
+                        scope=scope,
+                        agent_definition_id=agent_definition_id,
                     )
                     job["results"].append(VideoResult(
                         video_id=vid_id, title=title, status="success",
@@ -184,12 +305,16 @@ async def _process_channel(job_id: str, channel_url: str, agent_id: str, languag
                 ))
 
             job["processed_videos"] += 1
+            await _persist_channel_job(job)
 
         job["status"] = "completed"
+        await _persist_channel_job(job)
 
     except Exception as e:
+        logger.exception("Channel job %s failed", job_id)
         job["status"] = "error"
         job["error"] = str(e)
+        await _persist_channel_job(job)
 
 
 class CookiesRequest(BaseModel):
@@ -211,9 +336,36 @@ async def cookies_status(request: Request):
     return {"has_cookies": has_cookies()}
 
 
+@router.get("/channel-jobs", response_model=list[ChannelJobStatus])
+async def list_channel_jobs(request_obj: Request):
+    auth = get_auth_user(request_obj)
+    org_id = require_org(auth)
+    stored = await cosmos_service.list_youtube_channel_jobs(org_id, limit=30)
+    out: list[ChannelJobStatus] = []
+    for row in stored:
+        jid = row.get("job_id")
+        mem = _channel_jobs.get(jid) if jid else None
+        if mem and mem.get("org_id") != org_id:
+            mem = None
+        merged = _merge_job(mem, row)
+        if merged and merged.get("org_id") == org_id:
+            out.append(_job_to_status(merged))
+    return out
+
+
 @router.get("/channel/{job_id}", response_model=ChannelJobStatus)
-async def get_channel_status(job_id: str):
-    job = _channel_jobs.get(job_id)
-    if not job:
+async def get_channel_status(job_id: str, request_obj: Request):
+    auth = get_auth_user(request_obj)
+    org_id = require_org(auth)
+    stored = await cosmos_service.get_youtube_channel_job(job_id, org_id)
+    mem = _channel_jobs.get(job_id)
+    if mem and mem.get("org_id") != org_id:
+        mem = None
+    if stored and stored.get("org_id") != org_id:
         raise HTTPException(status_code=404, detail="Job not found")
-    return ChannelJobStatus(**{k: v for k, v in job.items() if k != "error"})
+    merged = _merge_job(mem, stored)
+    if not merged:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if merged.get("org_id") != org_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _job_to_status(merged)

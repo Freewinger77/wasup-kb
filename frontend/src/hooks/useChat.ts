@@ -8,7 +8,7 @@ export interface Message {
   sources?: ChatResponse['sources'];
 }
 
-export function useChat(agentId: string, language: Language) {
+export function useChat(agentId: string, language: Language, customerId?: string, agentDefinitionId?: string) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [isLoading, setIsLoading] = useState(false);
@@ -35,7 +35,14 @@ export function useChat(agentId: string, language: Language) {
 
     try {
       await streamChat(
-        { message: text, agent_id: agentId, session_id: sessionId, language },
+        {
+          message: text,
+          agent_id: agentId,
+          session_id: sessionId,
+          language,
+          customer_id: customerId,
+          agent_definition_id: agentDefinitionId,
+        },
         (meta) => {
           setSessionId(meta.session_id);
           setMessages(prev => {
@@ -71,7 +78,7 @@ export function useChat(agentId: string, language: Language) {
       });
       setIsLoading(false);
     }
-  }, [agentId, language, sessionId, isLoading]);
+  }, [agentId, language, customerId, agentDefinitionId, sessionId, isLoading]);
 
   const clearChat = useCallback(() => {
     setMessages([]);

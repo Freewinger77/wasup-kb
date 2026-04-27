@@ -6,9 +6,11 @@ import {
   History,
   CirclePlay,
   Sparkles,
+  Building2,
+  Bot,
 } from 'lucide-react';
 
-export type View = 'chat' | 'voice' | 'connectors' | 'upload' | 'youtube' | 'history';
+export type View = 'chat' | 'voice' | 'customers' | 'builder' | 'connectors' | 'upload' | 'youtube' | 'history';
 
 interface Props {
   active: View;
@@ -18,6 +20,8 @@ interface Props {
 const NAV_ITEMS: { id: View; label: string; icon: typeof MessageSquare }[] = [
   { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'voice', label: 'Voice', icon: Mic },
+  { id: 'customers', label: 'Customers', icon: Building2 },
+  { id: 'builder', label: 'Agent Builder', icon: Bot },
   { id: 'upload', label: 'Upload', icon: Upload },
   { id: 'connectors', label: 'Google Drive', icon: FolderSync },
   { id: 'youtube', label: 'YouTube', icon: CirclePlay },

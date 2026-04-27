@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from backend.auth import get_auth_user, require_org
 from backend.services.cosmos_db import cosmos_service
-from backend.models.schemas import AgentProfile
+from backend.models.schemas import AgentDefinition, AgentProfile
 
 router = APIRouter()
 
@@ -38,27 +38,28 @@ async def delete_session(session_id: str, request: Request):
 @router.get("/agents")
 async def list_agents(request: Request):
     auth = get_auth_user(request)
-    require_org(auth)
-    agents = await cosmos_service.list_agents()
-    return agents
+    org_id = require_org(auth)
+    return await cosmos_service.list_agent_definitions(org_id)
 
 
 @router.post("/agents")
 async def create_or_update_agent(agent: AgentProfile, request: Request):
     auth = get_auth_user(request)
-    require_org(auth)
-    agent_dict = agent.model_dump()
-    agent_dict["id"] = agent.agent_id
-    agent_dict["created_at"] = agent_dict["created_at"].isoformat()
-    await cosmos_service.upsert_agent(agent_dict)
-    return agent_dict
+    org_id = require_org(auth)
+    agent_doc = AgentDefinition(
+        id=agent.agent_id,
+        org_id=org_id,
+        name=agent.name,
+        preferred_language=agent.preferred_language,
+    ).model_dump()
+    return await cosmos_service.upsert_agent_definition(agent_doc)
 
 
 @router.get("/agents/{agent_id}")
 async def get_agent(agent_id: str, request: Request):
     auth = get_auth_user(request)
-    require_org(auth)
-    agent = await cosmos_service.get_agent(agent_id)
+    org_id = require_org(auth)
+    agent = await cosmos_service.get_agent_definition(agent_id, org_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     return agent

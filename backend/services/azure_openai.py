@@ -1,11 +1,12 @@
 from openai import AsyncAzureOpenAI
 from backend.config import settings
 from typing import AsyncIterator
+import json
 
 _client = AsyncAzureOpenAI(
-    api_key=settings.AZURE_OPENAI_KEY,
+    api_key=settings.AZURE_OPENAI_CHAT_KEY,
     api_version="2024-10-21",
-    azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+    azure_endpoint=settings.AZURE_OPENAI_CHAT_ENDPOINT,
 )
 
 SYSTEM_PROMPT = """You are a knowledgeable and helpful sales assistant working for a team of sales agents. \
@@ -40,12 +41,20 @@ async def generate_rag_response(
     context_docs: list[dict],
     conversation_history: list[dict] | None = None,
     voice_mode: bool = False,
+    system_prompt: str | None = None,
 ) -> AsyncIterator[str]:
     context_text = "\n\n---\n\n".join(
         f"[Source: {doc['filename']}]\n{doc['content']}" for doc in context_docs
     )
 
-    prompt = VOICE_SYSTEM_PROMPT if voice_mode else SYSTEM_PROMPT
+    prompt = system_prompt or (VOICE_SYSTEM_PROMPT if voice_mode else SYSTEM_PROMPT)
+    if system_prompt and voice_mode:
+        prompt = f"""{system_prompt}
+
+VOICE MODE RULES:
+- Keep responses short, natural, and conversational.
+- Do not use markdown, bullets, headers, emojis, or special formatting.
+- Answer in the same language as the user."""
     messages = [{"role": "system", "content": prompt}]
 
     if conversation_history:
@@ -79,8 +88,43 @@ async def generate_rag_response_full(
     context_docs: list[dict],
     conversation_history: list[dict] | None = None,
     voice_mode: bool = False,
+    system_prompt: str | None = None,
 ) -> str:
     parts = []
-    async for token in generate_rag_response(query, context_docs, conversation_history, voice_mode=voice_mode):
+    async for token in generate_rag_response(
+        query,
+        context_docs,
+        conversation_history,
+        voice_mode=voice_mode,
+        system_prompt=system_prompt,
+    ):
         parts.append(token)
     return "".join(parts)
+
+
+async def complete_json(system_prompt: str, user_prompt: str, max_tokens: int = 4000) -> dict:
+    response = await _client.chat.completions.create(
+        model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.2,
+        max_tokens=max_tokens,
+    )
+    content = response.choices[0].message.content or "{}"
+    return json.loads(content)
+
+
+async def complete_text(system_prompt: str, user_prompt: str, max_tokens: int = 3000) -> str:
+    response = await _client.chat.completions.create(
+        model=settings.AZURE_OPENAI_CHAT_DEPLOYMENT,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.3,
+        max_tokens=max_tokens,
+    )
+    return response.choices[0].message.content or ""
